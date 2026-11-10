@@ -1,0 +1,18 @@
+[package]
+name = "ja11-glass-eq"
+version = "1.0.0"
+description = "JA11 Glass EQ"
+authors = ["JA11 Glass EQ"]
+edition = "2021"
+
+[lib]
+name = "ja11_glass_eq_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

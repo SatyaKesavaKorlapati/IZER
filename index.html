@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IZER</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Abhaya+Libre:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <script>
+      (function () {
+        try {
+          var look = null;
+          var dark = null;
+          var intensity = 0;
+          var raw = localStorage.getItem("ja11-glass-eq-v1");
+          var settings = null;
+          if (raw) {
+            var data = JSON.parse(raw);
+            settings = data && data.settings;
+          }
+          if (settings && typeof settings.dark === "boolean") {
+            var saved = settings.theme;
+            if (saved === "papein" || saved === "paper" || saved === "cyan" || saved === "cyan-light" || saved === "earth") look = saved;
+            else if (saved === "custom-dark" || saved === "dark") look = "cyan";
+            else if (saved === "light") look = "cyan-light";
+            dark = settings.dark;
+            if (typeof settings.themeIntensity === "number") intensity = settings.themeIntensity;
+          } else if (settings && settings.theme) {
+            var legacy = settings.theme;
+            if (legacy === "papein") {
+              look = "papein";
+              dark = false;
+            } else if (legacy === "custom-dark") {
+              look = "cyan";
+              dark = true;
+              intensity = typeof settings.themeIntensity === "number" ? settings.themeIntensity : 64;
+            } else if (legacy === "cyan" || legacy === "dark") {
+              look = "cyan";
+              dark = true;
+            } else if (legacy === "paper") {
+              look = "paper";
+              dark = false;
+            } else if (legacy === "cyan-light" || legacy === "light") {
+              look = "cyan-light";
+              dark = false;
+            }
+          }
+          if (!look) look = "papein";
+          if (dark === null) dark = false;
+          document.documentElement.setAttribute("data-theme", look);
+          document.documentElement.setAttribute("data-mode", dark ? "dark" : "light");
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+          if (dark) {
+            var clamped = Math.max(0, Math.min(100, intensity));
+            document.documentElement.style.setProperty("--darkness", String(clamped / 100));
+          }
+        } catch (error) {
+          document.documentElement.setAttribute("data-theme", "papein");
+          document.documentElement.setAttribute("data-mode", "light");
+        }
+      })();
+    </script>
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <link rel="apple-touch-icon" href="./icon.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

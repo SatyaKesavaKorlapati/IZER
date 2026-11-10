@@ -1,0 +1,14 @@
+{
+  "appId": "com.izer.app",
+  "appName": "IZER",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#e8c99b"
+    }
+  }
+}
