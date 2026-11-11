@@ -189,7 +189,8 @@ export function ja11ReportsTarget(
 ): boolean {
   if (!ja11EqOffTarget(device)) return false;
   if (isHidi2cName(device?.productName)) return false;
-  return !!device?.collections?.some((collection) => collectionIsPeq(collection.usagePage, collection.usage));
+  if (!device?.collections || device.collections.length === 0) return true;
+  return !!device.collections.some((collection) => collectionIsPeq(collection.usagePage, collection.usage));
 }
 
 function wrongInterfaceDetail(device: { productName?: string }): string {
@@ -316,6 +317,16 @@ async function openPicked(devices: HidDeviceLike[]): Promise<HidResult> {
   }
 }
 
+export const RUNTIME_JA11_FILTERS: HidFilter[] = [
+  {
+    vendorId: JA11_VENDOR_ID,
+    productId: JA11_PRODUCT_ID,
+  },
+  {
+    vendorId: JA11_VENDOR_ID,
+  },
+];
+
 /**
  * Call from a click. The chooser lists the JA11 PEQ collection only.
  * Does not write a report.
@@ -323,7 +334,7 @@ async function openPicked(devices: HidDeviceLike[]): Promise<HidResult> {
 export async function requestKnownDac(): Promise<HidResult> {
   picker = true;
   try {
-    const filtered = await prompt(JA11_FILTERS);
+    const filtered = await prompt(RUNTIME_JA11_FILTERS);
     if (!filtered.ok) return filtered.result;
     return openPicked(filtered.devices);
   } finally {
