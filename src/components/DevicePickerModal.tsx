@@ -117,14 +117,14 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
 
   function handleConnect() {
     onClose();
-    // Connect directly to the selected audio dongle
-    void store.connectKnown();
+    // Connect directly to the selected audio dongle with preserved user gesture
+    store.pairNewDac();
   }
 
   function handlePairNew() {
     onClose();
     // Preserves synchronous user gesture so the browser popup opens immediately
-    void store.connectKnown();
+    store.pairNewDac();
   }
 
   return (
@@ -183,8 +183,8 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
             >
               ?
             </button>
-            <button type="button" className="themed-hid-btn-pair-new" onClick={handlePairNew} title="Scan for unlisted HID hardware">
-              Scan for devices
+            <button type="button" className="themed-hid-btn-pair-new" onClick={handlePairNew} title="Connect new HID device">
+              Connect new device
             </button>
           </div>
           <div className="themed-hid-foot-actions">

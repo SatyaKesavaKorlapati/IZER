@@ -178,6 +178,25 @@ function createWindow() {
         res.end(JSON.stringify(bounds));
         return;
       }
+      if (req.url === "/click" && req.method === "POST") {
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; });
+        req.on("end", async () => {
+          try {
+            const { x, y } = JSON.parse(body);
+            mainWindow.webContents.focus();
+            mainWindow.webContents.sendInputEvent({ type: "mouseMove", x, y });
+            mainWindow.webContents.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+            mainWindow.webContents.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: true }));
+          } catch (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: err.message }));
+          }
+        });
+        return;
+      }
       if (req.url === "/eval" && req.method === "POST") {
         let body = "";
         req.on("data", (chunk) => { body += chunk; });

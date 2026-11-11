@@ -125,6 +125,8 @@ interface StoreValue {
   device: DeviceState;
   connectKnown: () => Promise<void>;
   connectAny: () => Promise<void>;
+  pairNewDac: () => void;
+  pairAnyDac: () => void;
   disconnect: () => Promise<void>;
   canWriteDac: boolean;
   dacBusy: boolean;
@@ -346,7 +348,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setStatus(connectedStatus(previous.identity));
       return;
     }
-    if (result.reason === "none") {
+    if (result.reason === "none" || result.reason === "none-chosen" || result.reason === "dismissed") {
       setDevice({ phase: "idle", detail: result.detail });
       setStatus(result.detail);
       return;
@@ -1121,6 +1123,40 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const result = await requestAnyHid();
       if (epoch.current !== seen) return;
       showHidResult(result, true);
+    },
+    pairNewDac: () => {
+      epoch.current += 1;
+      const seen = epoch.current;
+      if (!webHidAvailable()) {
+        const detail = hidUnavailableDetail();
+        setDevice({ phase: "unsupported", detail, reason: "no-hid" });
+        setStatus(detail);
+        return;
+      }
+      setDevice((current) => ({ ...current, phase: "opening", detail: "Waiting for a DAC…" }));
+      setStatus("Waiting for a DAC…");
+      // Execute requestKnownDac synchronously without awaiting prior promises to retain user gesture
+      void requestKnownDac().then((result) => {
+        if (epoch.current !== seen) return;
+        showHidResult(result, true);
+      });
+    },
+    pairAnyDac: () => {
+      epoch.current += 1;
+      const seen = epoch.current;
+      if (!webHidAvailable()) {
+        const detail = hidUnavailableDetail();
+        setDevice({ phase: "unsupported", detail, reason: "no-hid" });
+        setStatus(detail);
+        return;
+      }
+      setDevice((current) => ({ ...current, phase: "opening", detail: "Waiting for a DAC…" }));
+      setStatus("Waiting for a DAC…");
+      // Execute requestAnyHid synchronously without awaiting prior promises to retain user gesture
+      void requestAnyHid().then((result) => {
+        if (epoch.current !== seen) return;
+        showHidResult(result, true);
+      });
     },
     disconnect: async () => {
       cancelLive();
