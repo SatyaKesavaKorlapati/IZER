@@ -4,7 +4,7 @@ import { Dropdown } from "../components/Dropdown";
 import { ThemeSwitch } from "../components/ThemeSwitch";
 import { Toggle } from "../components/Toggle";
 import { GRAPH_PALETTES, readGraphPalette, writeGraphPalette, type GraphPaletteId } from "../eq/palettes";
-import { readDarkness, readWhitePoint, writeDarkness, writeWhitePoint } from "../lib/displayAdjustments";
+import { readWhitePoint, writeWhitePoint } from "../lib/displayAdjustments";
 import { TILE_MAX, TILE_MIN, readTileWidth, writeTileWidth } from "../lib/tiles";
 import { useStore } from "../state/store";
 
@@ -18,7 +18,6 @@ export function Settings() {
   const [paletteId, setPaletteId] = useState<GraphPaletteId>(() => readGraphPalette().id);
   const [tileWidth, setTileWidth] = useState(readTileWidth);
   const [whitePoint, setWhitePoint] = useState(readWhitePoint);
-  const [darkness, setDarkness] = useState(readDarkness);
 
   return (
     <section className="screen">
@@ -98,18 +97,14 @@ export function Settings() {
                 type="range"
                 min={0}
                 max={100}
-                step={2}
-                value={darkness}
+                step={1}
+                value={store.themeIntensity}
                 aria-label="Darkness level"
-                aria-valuenow={darkness}
-                aria-valuetext={`${darkness}%`}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  setDarkness(next);
-                  writeDarkness(next);
-                }}
+                aria-valuenow={store.themeIntensity}
+                aria-valuetext={`${store.themeIntensity}%`}
+                onChange={(event) => store.setThemeIntensity(Number(event.target.value))}
               />
-              <em>{darkness}%</em>
+              <em>{store.themeIntensity}%</em>
             </label>
           </div>
         )}

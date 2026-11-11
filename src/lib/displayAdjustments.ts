@@ -31,18 +31,26 @@ export function readDarkness(): number {
 }
 
 export function writeDarkness(val: number): void {
+  const next = Math.max(0, Math.min(100, Math.round(val)));
   try {
-    localStorage.setItem(DARKNESS_KEY, String(val));
-    applyDisplayAdjustments();
-  } catch {}
+    localStorage.setItem(DARKNESS_KEY, String(next));
+  } catch {
+    /* storage blocked */
+  }
+  applyDisplayAdjustments(next);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("izer-darkness", { detail: next }));
+  }
 }
 
-export function applyDisplayAdjustments(): void {
+export function applyDisplayAdjustments(darkness = readDarkness()): void {
   if (typeof document === "undefined") return;
   const wp = readWhitePoint();
-  const dk = readDarkness();
-  document.documentElement.style.setProperty("--papein-white-point", `${wp}%`);
-  document.documentElement.style.setProperty("--papein-darkness", `${dk}%`);
+  const dk = Math.max(0, Math.min(100, darkness));
+  const root = document.documentElement;
+  root.style.setProperty("--papein-white-point", `${wp}%`);
+  root.style.setProperty("--papein-darkness", `${dk}%`);
+  root.style.setProperty("--papein-darkness-level", String(dk));
 }
 
 // Automatically apply on load

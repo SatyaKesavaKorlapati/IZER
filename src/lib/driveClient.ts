@@ -46,6 +46,21 @@ export type DriveUploadProgress = {
 
 const DRIVE_CACHE_KEY = "ja11-drive-verified";
 
+type DriveElectronBridge = {
+  driveApiBase?: string;
+};
+
+function driveApiUrl(apiPath: string): string {
+  const bridge = (window as Window & { electronAPI?: DriveElectronBridge }).electronAPI;
+  const base = bridge?.driveApiBase?.replace(/\/$/, "");
+  if (base) return `${base}${apiPath.startsWith("/") ? apiPath : `/${apiPath}`}`;
+  return apiPath;
+}
+
+async function driveFetch(apiPath: string, init?: RequestInit): Promise<Response> {
+  return fetch(driveApiUrl(apiPath), init);
+}
+
 export function readCachedDriveVerified(): boolean {
   try {
     return localStorage.getItem(DRIVE_CACHE_KEY) === "1";
@@ -144,28 +159,28 @@ export function buildDriveExportFiles(userPresets: Preset[], favorites: string[]
 }
 
 export async function fetchDriveStatus(): Promise<DriveStatus> {
-  const response = await fetch("/api/drive/status");
-  if (!response.ok) throw new Error("Could not reach the sync service. Run npm run dev on this computer.");
+  const response = await driveFetch("/api/drive/status");
+  if (!response.ok) throw new Error("Could not reach the sync service. Restart IZER on this computer.");
   return (await response.json()) as DriveStatus;
 }
 
 export async function connectGoogleDrive(): Promise<{ ok: boolean; detail: string; pending?: boolean }> {
-  const response = await fetch("/api/drive/connect", { method: "POST" });
+  const response = await driveFetch("/api/drive/connect", { method: "POST" });
   return (await response.json()) as { ok: boolean; detail: string; pending?: boolean };
 }
 
 export async function disconnectGoogleDrive(): Promise<{ ok: boolean; detail: string }> {
-  const response = await fetch("/api/drive/disconnect", { method: "POST" });
+  const response = await driveFetch("/api/drive/disconnect", { method: "POST" });
   return (await response.json()) as { ok: boolean; detail: string };
 }
 
 export async function adoptExistingGoogleDrive(): Promise<{ ok: boolean; detail: string }> {
-  const response = await fetch("/api/drive/adopt", { method: "POST" });
+  const response = await driveFetch("/api/drive/adopt", { method: "POST" });
   return (await response.json()) as { ok: boolean; detail: string };
 }
 
 export async function fetchUploadProgress(): Promise<DriveUploadProgress> {
-  const response = await fetch("/api/drive/progress");
+  const response = await driveFetch("/api/drive/progress");
   return (await response.json()) as DriveUploadProgress;
 }
 
@@ -175,7 +190,7 @@ export async function startLibraryUpload(
 ): Promise<{ ok: boolean; detail: string; started?: boolean; queued?: boolean; id?: string }> {
   const files = buildDriveExportFiles(userPresets, favorites);
   const label = `Preset library · ${new Date().toLocaleString()}`;
-  const response = await fetch("/api/drive/sync", {
+  const response = await driveFetch("/api/drive/sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ files, label }),
@@ -184,7 +199,7 @@ export async function startLibraryUpload(
 }
 
 export async function cancelDriveUpload(id?: string): Promise<{ ok: boolean; detail: string }> {
-  const response = await fetch("/api/drive/cancel", {
+  const response = await driveFetch("/api/drive/cancel", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(id ? { id } : {}),

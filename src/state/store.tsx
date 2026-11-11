@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { builtInPresets, FACTORY_PREVIEW, type Preset } from "../data/presets";
+import { writeDarkness } from "../lib/displayAdjustments";
 import { dacCurveSentence, dacEditorName, matchCurveToPresets } from "../eq/match";
 import { effectivePreamp, eqSignature, factoryResetModel, flatModel, normalizeEq, type Band, type EqModel } from "../eq/types";
 import {
@@ -16,6 +17,10 @@ import {
   NO_DAC_DETAIL,
   noteJa11SaveReconnectAttempt,
   noteJa11SaveReconnectSuccess,
+  beginDeferredHidScan,
+  cancelDeferredHidScan,
+  completeDeferredHidScan,
+  connectGrantedHid,
   openPermittedDevice,
   permittedJa11Present,
   readJa11Eq,
@@ -128,6 +133,11 @@ interface StoreValue {
   connectAny: () => Promise<void>;
   pairNewDac: () => void;
   pairAnyDac: () => void;
+  connectFromPicker: (
+    pick:
+      | { mode: "paired"; vendorId: number; productId?: number }
+      | { mode: "deferred"; deviceId: string },
+  ) => Promise<void>;
   disconnect: () => Promise<void>;
   unpairCurrent: () => Promise<void>;
   unpairTarget: (vendorId?: number, productId?: number) => Promise<boolean>;
@@ -253,8 +263,13 @@ function applyTheme(look: Look, dark: boolean, intensity: number) {
   root.dataset.theme = look;
   root.dataset.mode = dark ? "dark" : "light";
   root.style.colorScheme = themeColorScheme(dark);
-  if (dark) root.style.setProperty("--darkness", String(intensity / 100));
-  else root.style.removeProperty("--darkness");
+  if (dark) {
+    root.style.setProperty("--darkness", String(intensity / 100));
+    root.style.setProperty("--papein-darkness-level", String(intensity));
+    root.style.setProperty("--papein-darkness", `${intensity}%`);
+  } else {
+    root.style.removeProperty("--darkness");
+  }
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -918,6 +933,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setThemeIntensity: (intensity) => {
       const themeIntensity = Math.round(Math.min(100, Math.max(0, intensity)));
       if (dark) document.documentElement.style.setProperty("--darkness", String(themeIntensity / 100));
+      writeDarkness(themeIntensity);
       setSettings((current) => ({ ...current, themeIntensity }));
     },
     resetUser1: () => {
@@ -1086,7 +1102,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     clearDacReading: () => setDacReading(null),
     setDacReading: (r: DacReading | null) => setDacReading(r),
     devicePickerOpen,
-    setDevicePickerOpen,
+    setDevicePickerOpen: (open: boolean) => {
+      setDevicePickerOpen(open);
+      if (open) {
+        void beginDeferredHidScan();
+      } else {
+        void cancelDeferredHidScan();
+      }
+    },
     connectKnown: async () => {
       epoch.current += 1;
       const seen = epoch.current;
@@ -1144,6 +1167,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         showHidResult(result, true);
       });
     },
+    connectFromPicker: async (pick) => {
+      epoch.current += 1;
+      const seen = epoch.current;
+      if (!webHidAvailable()) {
+        const detail = hidUnavailableDetail();
+        setDevice({ phase: "unsupported", detail, reason: "no-hid" });
+        setStatus(detail);
+        return;
+      }
+      setDevice((current) => ({ ...current, phase: "opening", detail: "Waiting for a DAC…" }));
+      setStatus("Waiting for a DAC…");
+      const result =
+        pick.mode === "paired"
+          ? await connectGrantedHid(pick.vendorId, pick.productId)
+          : await completeDeferredHidScan(pick.deviceId);
+      if (epoch.current !== seen) return;
+      showHidResult(result, true);
+    },
     pairAnyDac: () => {
       epoch.current += 1;
       const seen = epoch.current;
@@ -1174,6 +1215,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       cancelLive();
       liveBase.current = null;
       epoch.current += 1;
+      await cancelDeferredHidScan();
       const identity = deviceRef.current.identity;
       await unpairDevice(identity?.vendorId, identity?.productId);
       await closeCurrent();
@@ -1183,12 +1225,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     unpairTarget: async (vendorId?: number, productId?: number) => {
       epoch.current += 1;
+      await cancelDeferredHidScan();
+      if (deviceRef.current.phase === "connected") {
+        await closeCurrent();
+      }
       const res = await unpairDevice(vendorId, productId);
       if (deviceRef.current.identity && (vendorId == null || deviceRef.current.identity.vendorId === vendorId)) {
-        await closeCurrent();
         setDevice({ phase: "idle", detail: NO_DAC_DETAIL });
       }
-      setStatus("Device unpaired.");
+      setStatus(res ? "Device unpaired." : "Unpair did not complete. Try again.");
       return res;
     },
     importText,

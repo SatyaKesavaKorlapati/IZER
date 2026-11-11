@@ -24,6 +24,31 @@ export const JA11_FILTERS: HidFilter[] = [
 ];
 
 export const NO_DAC_DETAIL = "No DAC connected. Choose the dongle to read its name. Nothing was written.";
+const JA11_UNPAIR_KEY = "ja11-hid-unpaired";
+
+export function markJa11Unpaired(): void {
+  try {
+    localStorage.setItem(JA11_UNPAIR_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clearJa11Unpaired(): void {
+  try {
+    localStorage.removeItem(JA11_UNPAIR_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isJa11Unpaired(): boolean {
+  try {
+    return localStorage.getItem(JA11_UNPAIR_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 const PERMISSION_DISMISSED = "Permission dismissed. No DAC was opened.";
 const NO_DEVICE_CHOSEN = "No device chosen. No DAC was opened.";
 
@@ -225,6 +250,35 @@ async function closeUnlocked(): Promise<void> {
   await device.close().catch(() => undefined);
 }
 
+type ElectronHidBridge = {
+  isElectron?: boolean;
+  revokeHidDevice?: (vid: number, revokeAll: boolean) => Promise<{ ok?: boolean }>;
+  allowJa11Hid?: () => Promise<{ ok?: boolean }>;
+  pickHidDevice?: (deviceId: string) => Promise<{ ok?: boolean }>;
+  cancelHidPick?: () => Promise<{ ok?: boolean }>;
+  beginHidScan?: () => Promise<{ ok?: boolean }>;
+};
+
+let deferredHidRequest: Promise<HidDeviceLike[]> | null = null;
+
+function electronHidBridge(): ElectronHidBridge | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (window as Window & { electronAPI?: ElectronHidBridge }).electronAPI;
+}
+
+async function revokeElectronHidPermission(vendorId: number, revokeAllVendor: boolean): Promise<void> {
+  const api = electronHidBridge();
+  if (!api?.revokeHidDevice) return;
+  await api.revokeHidDevice(vendorId, revokeAllVendor).catch(() => undefined);
+}
+
+export async function allowElectronJa11Hid(): Promise<void> {
+  clearJa11Unpaired();
+  const api = electronHidBridge();
+  if (!api?.allowJa11Hid) return;
+  await api.allowJa11Hid().catch(() => undefined);
+}
+
 /** Revoke WebHID permission and unpair the specified device from this computer. */
 export async function unpairDevice(vendorId?: number, productId?: number): Promise<boolean> {
   const hid = hidApi();
@@ -233,19 +287,35 @@ export async function unpairDevice(vendorId?: number, productId?: number): Promi
     try {
       const devices = await hid.getDevices();
       let unpaired = false;
+      const ja11Vendor = vendorId === JA11_VENDOR_ID;
       for (const d of devices) {
-        const matchVendor = vendorId == null || d.vendorId === vendorId;
-        const matchProduct = productId == null || d.productId === productId;
-        if (matchVendor && matchProduct) {
-          if (current === d) {
-            current = null;
-            await d.close().catch(() => undefined);
-          }
-          if (typeof d.forget === "function") {
-            await d.forget().catch(() => undefined);
-            unpaired = true;
-          }
+        const matchesJa11 =
+          d.vendorId === JA11_VENDOR_ID ||
+          /ja11|jadeaudio/i.test((d.productName || "").trim());
+        if (ja11Vendor && productId == null && !matchesJa11) continue;
+        if (vendorId != null && d.vendorId !== vendorId && !(ja11Vendor && matchesJa11)) continue;
+        if (!ja11Vendor && productId != null && d.productId !== productId) continue;
+        if (current === d) {
+          current = null;
+          await d.close().catch(() => undefined);
         }
+        if (typeof d.forget === "function") {
+          await d.forget().catch(() => undefined);
+          unpaired = true;
+        }
+      }
+      if (ja11Vendor) {
+        markJa11Unpaired();
+        const after = await hid.getDevices();
+        const ja11Left = after.some(
+          (d) =>
+            d.vendorId === JA11_VENDOR_ID ||
+            /ja11|jadeaudio/i.test((d.productName || "").trim()),
+        );
+        return unpaired || !ja11Left;
+      }
+      if (vendorId != null) {
+        await revokeElectronHidPermission(vendorId, productId == null);
       }
       return unpaired;
     } catch {
@@ -288,6 +358,9 @@ export function closeCurrent(): Promise<void> {
 
 async function readGranted(hid: HidApi): Promise<HidResult> {
   if (picker) return { ok: false, reason: "busy", detail: "" };
+  if (isJa11Unpaired()) {
+    return { ok: false, reason: "none", detail: NO_DAC_DETAIL };
+  }
   try {
     const granted = await hid.getDevices();
     if (picker) return { ok: false, reason: "busy", detail: "" };
@@ -362,6 +435,7 @@ export const RUNTIME_JA11_FILTERS: HidFilter[] = [
  * Does not write a report.
  */
 export async function requestKnownDac(): Promise<HidResult> {
+  await allowElectronJa11Hid();
   picker = true;
   try {
     const filtered = await prompt(RUNTIME_JA11_FILTERS);
@@ -382,6 +456,87 @@ export async function requestAnyHid(): Promise<HidResult> {
   } finally {
     picker = false;
   }
+}
+
+export function electronDefersHidPicker(): boolean {
+  return Boolean(electronHidBridge()?.isElectron);
+}
+
+/** Start Electron deferred HID scan (lists USB devices in the connect modal). */
+export async function beginDeferredHidScan(): Promise<boolean> {
+  if (!electronDefersHidPicker()) return false;
+  const hid = hidApi();
+  if (!hid) return false;
+  if (deferredHidRequest) return true;
+  if (picker) {
+    picker = false;
+  }
+  const api = electronHidBridge();
+  if (api?.beginHidScan) await api.beginHidScan().catch(() => undefined);
+  picker = true;
+  deferredHidRequest = hid.requestDevice({ filters: [] }).catch((error) => {
+    deferredHidRequest = null;
+    picker = false;
+    throw error;
+  });
+  void deferredHidRequest.catch(() => undefined);
+  return true;
+}
+
+export async function cancelDeferredHidScan(): Promise<void> {
+  const api = electronHidBridge();
+  if (api?.cancelHidPick) await api.cancelHidPick().catch(() => undefined);
+  deferredHidRequest = null;
+  picker = false;
+}
+
+export async function completeDeferredHidScan(deviceId: string): Promise<HidResult> {
+  const api = electronHidBridge();
+  if (!api?.pickHidDevice) {
+    return { ok: false, reason: "failed", detail: "HID picker is not available." };
+  }
+  if (!deferredHidRequest) {
+    return { ok: false, reason: "failed", detail: "Scan USB devices first, then choose one." };
+  }
+  if (isJa11Unpaired()) {
+    await allowElectronJa11Hid();
+  }
+  await api.pickHidDevice(deviceId);
+  try {
+    const devices = await deferredHidRequest;
+    deferredHidRequest = null;
+    picker = false;
+    clearJa11Unpaired();
+    return openPicked(devices);
+  } catch (error) {
+    deferredHidRequest = null;
+    picker = false;
+    const name = error instanceof DOMException ? error.name : "";
+    if (name === "NotFoundError" || name === "AbortError") {
+      return { ok: false, reason: "dismissed", detail: "No device chosen." };
+    }
+    return { ok: false, reason: "failed", detail: "Could not open the chosen device." };
+  }
+}
+
+export async function connectGrantedHid(vendorId: number, productId?: number): Promise<HidResult> {
+  if (picker) return { ok: false, reason: "busy", detail: "" };
+  const hid = hidApi();
+  if (!hid) return { ok: false, reason: "no-hid", detail: hidUnavailableDetail() };
+  if (isJa11Unpaired() || vendorId === JA11_VENDOR_ID) {
+    await allowElectronJa11Hid();
+  }
+  return lock(async () => {
+    const granted = await hid.getDevices();
+    const device =
+      granted.find((d) => d.vendorId === vendorId && (productId == null || d.productId === productId)) ??
+      granted.find((d) => d.vendorId === vendorId);
+    if (!device) {
+      return { ok: false, reason: "none", detail: NO_DAC_DETAIL };
+    }
+    clearJa11Unpaired();
+    return openPicked([device]);
+  });
 }
 
 /**

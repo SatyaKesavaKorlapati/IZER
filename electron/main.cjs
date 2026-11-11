@@ -35,6 +35,102 @@ if (process.platform === "win32") {
 }
 
 let mainWindow = null;
+let driveApiServer = null;
+let pendingHidPickCallback = null;
+let hidSessionListenersAttached = false;
+let hidPickerActive = false;
+
+const JA11_VENDOR_ID = 0x2972;
+const revokedJa11All = { value: false };
+
+function hidListRowOk(device) {
+  const name = String(device.productName || device.name || "").toLowerCase();
+  if (/hidi2c|touchpad|trackpad|elan|synaptics|keyboard|mouse|bluetooth/.test(name)) {
+    return false;
+  }
+  if ([0x8087, 0x04f3, 0x06cb].includes(device.vendorId)) {
+    return false;
+  }
+  return true;
+}
+
+function attachHidDevicePickerSession() {
+  if (hidSessionListenersAttached) return;
+  hidSessionListenersAttached = true;
+
+  session.defaultSession.on("select-hid-device", (event, details, callback) => {
+    event.preventDefault();
+    const raw = details.deviceList || [];
+    const list = raw.filter(hidListRowOk).map((d) => ({
+      deviceId: String(d.deviceId),
+      vendorId: d.vendorId,
+      productId: d.productId,
+      productName: d.productName || d.name || "HID device",
+    }));
+    if (list.length === 0) {
+      hidPickerActive = false;
+      callback("");
+      pendingHidPickCallback = null;
+      return;
+    }
+    hidPickerActive = true;
+    pendingHidPickCallback = callback;
+    const win =
+      mainWindow && !mainWindow.isDestroyed()
+        ? mainWindow
+        : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+    if (win) {
+      win.webContents.send("hid-device-list", list);
+    } else {
+      hidPickerActive = false;
+      pendingHidPickCallback("");
+      pendingHidPickCallback = null;
+    }
+  });
+}
+
+function attachHidPermissionHandlers() {
+  session.defaultSession.setPermissionCheckHandler(() => true);
+
+  session.defaultSession.setDevicePermissionHandler((details) => {
+    if (details.deviceType === "hid" && details.device) {
+      if (hidPickerActive) {
+        return true;
+      }
+      if (ja11PermissionDenied(details.device.vendorId, details.device.productId)) {
+        return false;
+      }
+      return true;
+    }
+    return true;
+  });
+}
+
+function ja11RevokeFile() {
+  return path.join(app.getPath("userData"), "ja11-hid-revoked");
+}
+
+function loadJa11Revoked() {
+  try {
+    return fs.readFileSync(ja11RevokeFile(), "utf8").trim() === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveJa11Revoked(on) {
+  try {
+    fs.mkdirSync(path.dirname(ja11RevokeFile()), { recursive: true });
+    fs.writeFileSync(ja11RevokeFile(), on ? "1" : "0", "utf8");
+  } catch (err) {
+    log("saveJa11Revoked failed:", err);
+  }
+}
+
+function ja11PermissionDenied(vendorId, productId) {
+  if (vendorId !== JA11_VENDOR_ID) return false;
+  return revokedJa11All.value;
+}
 
 function createWindow() {
   log("Inside createWindow function");
@@ -42,15 +138,19 @@ function createWindow() {
     ? path.join(__dirname, "icon.ico")
     : path.join(__dirname, "icon.png");
 
+  const customWindowChrome = process.platform === "win32";
+
   mainWindow = new BrowserWindow({
     width: 1340,
     height: 880,
     minWidth: 1080,
     minHeight: 720,
     title: "IZER - Indian Papercraft Parametric EQ",
-    backgroundColor: "#e8c99b",
+    backgroundColor: "#0f1115",
     icon: appIcon,
     autoHideMenuBar: true,
+    frame: !customWindowChrome,
+    thickFrame: false,
     show: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -72,37 +172,6 @@ function createWindow() {
   });
 
   // Configure WebHID Permissions for seamless in-app hardware DAC connection
-  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
-    if (permission === "hid") {
-      return true;
-    }
-    return true;
-  });
-
-  session.defaultSession.setDevicePermissionHandler((details) => {
-    if (details.deviceType === "hid") {
-      return true;
-    }
-    return true;
-  });
-
-  // When navigator.hid.requestDevice() is triggered, intercept and automatically pair
-  session.defaultSession.on("select-hid-device", (event, details, callback) => {
-    event.preventDefault();
-    if (details.deviceList && details.deviceList.length > 0) {
-      // Prioritize JadeAudio JA11 (Vendor 0x2972) and exclude system HIDI2C/Elan chips
-      const ja11 = details.deviceList.find(
-        (d) =>
-          d.vendorId === 0x2972 ||
-          /ja11|jadeaudio|fiio|dongle/i.test(d.productName || "") ||
-          (!/hidi2c|elan|synaptics|touchpad/i.test(d.productName || "") && d.vendorId !== 0x04f3 && d.vendorId !== 0x8087)
-      );
-      callback(ja11 ? ja11.deviceId : "");
-    } else {
-      callback("");
-    }
-  });
-
   // External links opened in external system browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("http:") || url.startsWith("https:")) {
@@ -142,6 +211,9 @@ function createWindow() {
 
   mainWindow.show();
   mainWindow.focus();
+
+  mainWindow.on("maximize", () => sendMaximizedState());
+  mainWindow.on("unmaximize", () => sendMaximizedState());
 
   mainWindow.on("close", (e) => {
     log("mainWindow close event fired!");
@@ -230,8 +302,101 @@ function createWindow() {
   }
 }
 
+ipcMain.handle("hid-revoke", (_event, payload) => {
+  const vendorId = payload?.vendorId;
+  const revokeAll = Boolean(payload?.revokeAll);
+  if (vendorId === JA11_VENDOR_ID && revokeAll) {
+    revokedJa11All.value = true;
+    saveJa11Revoked(true);
+    log("Revoked JA11 HID auto-grant");
+    return { ok: true };
+  }
+  return { ok: false };
+});
+
+ipcMain.handle("hid-allow-ja11", () => {
+  revokedJa11All.value = false;
+  saveJa11Revoked(false);
+  return { ok: true };
+});
+
+ipcMain.handle("hid-pick-device", (_event, payload) => {
+  const deviceId = payload?.deviceId;
+  if (typeof pendingHidPickCallback === "function" && deviceId) {
+    const cb = pendingHidPickCallback;
+    pendingHidPickCallback = null;
+    hidPickerActive = false;
+    cb(deviceId);
+    return { ok: true };
+  }
+  return { ok: false };
+});
+
+ipcMain.handle("hid-begin-scan", () => {
+  hidPickerActive = true;
+  return { ok: true };
+});
+
+function sendMaximizedState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("window-maximized-changed", mainWindow.isMaximized());
+}
+
+ipcMain.handle("window-minimize", () => {
+  mainWindow?.minimize();
+});
+
+ipcMain.handle("window-maximize-toggle", () => {
+  if (!mainWindow) return false;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+  const maximized = mainWindow.isMaximized();
+  sendMaximizedState();
+  return maximized;
+});
+
+ipcMain.handle("window-close", () => {
+  mainWindow?.close();
+});
+
+ipcMain.handle("window-is-maximized", () => mainWindow?.isMaximized() ?? false);
+
+ipcMain.handle("hid-pick-cancel", () => {
+  if (typeof pendingHidPickCallback === "function") {
+    const cb = pendingHidPickCallback;
+    pendingHidPickCallback = null;
+    hidPickerActive = false;
+    cb("");
+  }
+  return { ok: true };
+});
+
+function startDriveApiServer() {
+  const bundlePath = path.join(__dirname, "drive-api.bundle.cjs");
+  if (!fs.existsSync(bundlePath)) {
+    log("Drive API bundle missing at", bundlePath, "- run npm run bundle:drive-api");
+    return;
+  }
+  try {
+    const driveApi = require(bundlePath);
+    const port = driveApi.DRIVE_API_PORT ?? 1423;
+    driveApiServer = driveApi.startStandaloneDriveServer(port);
+    driveApiServer.on("error", (err) => {
+      log("Drive API server error:", err);
+    });
+    log("Drive API listening on 127.0.0.1:" + port);
+  } catch (err) {
+    log("Drive API failed to start:", err);
+  }
+}
+
 app.whenReady().then(() => {
   log("app.whenReady fired!");
+  startDriveApiServer();
+  revokedJa11All.value = false;
+  saveJa11Revoked(false);
+  attachHidPermissionHandlers();
+  attachHidDevicePickerSession();
   try {
     createWindow();
     log("createWindow completed successfully");
@@ -255,6 +420,12 @@ app.on("before-quit", () => {
 
 app.on("will-quit", () => {
   log("app will-quit event");
+  if (driveApiServer) {
+    try {
+      driveApiServer.close();
+    } catch {}
+    driveApiServer = null;
+  }
 });
 
 app.on("quit", (event, exitCode) => {

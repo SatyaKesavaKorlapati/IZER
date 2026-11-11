@@ -1,5 +1,11 @@
-import { useEffect, useState } from "react";
-import { formatHidId } from "../lib/hid";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  beginDeferredHidScan,
+  cancelDeferredHidScan,
+  formatHidId,
+  isJa11Unpaired,
+} from "../lib/hid";
+import { electronDefersHidPicker, subscribeHidDeviceList, type ScannedHidDevice } from "../lib/hidPicker";
 import { useStore } from "../state/store";
 
 interface DeviceItem {
@@ -8,6 +14,7 @@ interface DeviceItem {
   vendorId?: number;
   productId?: number;
   paired?: boolean;
+  electronDeviceId?: string;
   rawDevice?: { forget?: () => Promise<void> };
 }
 
@@ -16,9 +23,22 @@ interface DevicePickerModalProps {
   onClose: () => void;
 }
 
-function isDongleCandidate(d: { vendorId?: number; productId?: number; productName?: string }): boolean {
+type GrantedDevice = {
+  vendorId?: number;
+  productId?: number;
+  productName?: string;
+  forget?: () => Promise<void>;
+};
+
+function isJa11Grant(d: { vendorId?: number; productName?: string }): boolean {
+  if (d.vendorId === 0x2972) return true;
   const name = (d.productName || "").trim().toLowerCase();
-  // Filter out internal system/laptop hardware: trackpads, bluetooth, sensors, keyboards
+  return name.includes("ja11") || name.includes("jadeaudio");
+}
+
+function isDongleCandidate(d: { vendorId?: number; productId?: number; productName?: string }): boolean {
+  if (d.vendorId === 0x2972) return true;
+  const name = (d.productName || "").trim().toLowerCase();
   if (
     name.includes("hidi2c") ||
     name.includes("touchpad") ||
@@ -31,13 +51,9 @@ function isDongleCandidate(d: { vendorId?: number; productId?: number; productNa
   ) {
     return false;
   }
-  // Exclude known non-dongle vendor IDs (Intel, Elan, Synaptics)
   if (d.vendorId === 0x8087 || d.vendorId === 0x04f3 || d.vendorId === 0x06cb) {
     return false;
   }
-  // Allow JA11 vendor (0x2972)
-  if (d.vendorId === 0x2972) return true;
-  // Allow recognized audio keywords
   if (
     name.includes("ja11") ||
     name.includes("jadeaudio") ||
@@ -52,89 +68,225 @@ function isDongleCandidate(d: { vendorId?: number; productId?: number; productNa
   return false;
 }
 
+async function readGrantedDevices(): Promise<GrantedDevice[]> {
+  const nav = navigator as unknown as { hid?: { getDevices?: () => Promise<GrantedDevice[]> } };
+  if (!nav.hid || typeof nav.hid.getDevices !== "function") return [];
+  try {
+    return await nav.hid.getDevices();
+  } catch {
+    return [];
+  }
+}
+
+function buildPairedList(granted: GrantedDevice[]): DeviceItem[] {
+  const list: DeviceItem[] = [];
+  const seen = new Set<string>();
+  granted.forEach((d, idx) => {
+    if (isJa11Unpaired() && isJa11Grant(d)) return;
+    if (!isDongleCandidate(d)) return;
+    const key = `${d.vendorId ?? 0}:${d.productId ?? 0}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push({
+      id: `granted-${idx}-${d.vendorId ?? 0}-${d.productId ?? 0}`,
+      name:
+        d.productName?.trim() ||
+        (d.vendorId != null && d.productId != null
+          ? `HID ${formatHidId(d.vendorId)}:${formatHidId(d.productId)}`
+          : "HID device"),
+      vendorId: d.vendorId,
+      productId: d.productId,
+      paired: true,
+      rawDevice: d,
+    });
+  });
+  return list;
+}
+
+function buildAvailableList(scanned: ScannedHidDevice[], paired: DeviceItem[]): DeviceItem[] {
+  if (isJa11Unpaired()) {
+    return scanned.filter((d) => isDongleCandidate(d)).map((d) => ({
+      id: `usb-${d.deviceId}`,
+      name: d.productName?.trim() || "HID device",
+      vendorId: d.vendorId,
+      productId: d.productId,
+      paired: false,
+      electronDeviceId: d.deviceId,
+    }));
+  }
+  const pairedKeys = new Set(paired.map((p) => `${p.vendorId ?? 0}:${p.productId ?? 0}`));
+  return scanned
+    .filter((d) => isDongleCandidate(d))
+    .filter((d) => !pairedKeys.has(`${d.vendorId ?? 0}:${d.productId ?? 0}`))
+    .map((d) => ({
+      id: `usb-${d.deviceId}`,
+      name: d.productName?.trim() || "HID device",
+      vendorId: d.vendorId,
+      productId: d.productId,
+      paired: false,
+      electronDeviceId: d.deviceId,
+    }));
+}
+
+function DeviceRow({
+  device,
+  selected,
+  onSelect,
+}: {
+  device: DeviceItem;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <div
+      role="option"
+      aria-selected={selected}
+      className={`themed-hid-device-row ${selected ? "selected" : ""}`}
+      onClick={onSelect}
+    >
+      <div className="themed-hid-row-radio">
+        <div className={`themed-hid-radio-dot ${selected ? "checked" : ""}`} />
+      </div>
+      <div className="themed-hid-device-info">
+        <span className="themed-hid-device-name">{device.name}</span>
+        {device.vendorId != null && device.productId != null ? (
+          <span className="themed-hid-device-ids">
+            VID: {formatHidId(device.vendorId)} · PID: {formatHidId(device.productId)}
+          </span>
+        ) : null}
+      </div>
+      {device.paired ? (
+        <span className="themed-hid-badge-paired">Paired</span>
+      ) : (
+        <span className="themed-hid-badge-available">Not paired</span>
+      )}
+    </div>
+  );
+}
+
 export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
   const store = useStore();
-  const [devices, setDevices] = useState<DeviceItem[]>([]);
+  const [pairedDevices, setPairedDevices] = useState<DeviceItem[]>([]);
+  const [availableDevices, setAvailableDevices] = useState<DeviceItem[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const inElectron = electronDefersHidPicker();
+
+  const allDevices = useMemo(() => [...pairedDevices, ...availableDevices], [pairedDevices, availableDevices]);
+
+  const refreshPaired = useCallback(async (): Promise<DeviceItem[]> => {
+    const granted = await readGrantedDevices();
+    return buildPairedList(granted);
+  }, []);
+
+  const startUsbScan = useCallback(() => {
+    if (!inElectron) return;
+    setScanning(true);
+    void beginDeferredHidScan();
+  }, [inElectron]);
 
   useEffect(() => {
-    if (!open) return;
-    let active = true;
-
-    async function loadDevices() {
-      setLoading(true);
-      const list: DeviceItem[] = [];
-      try {
-        const nav = navigator as unknown as {
-          hid?: {
-            getDevices?: () => Promise<Array<{ vendorId?: number; productId?: number; productName?: string }>>;
-          };
-        };
-        if (nav.hid && typeof nav.hid.getDevices === "function") {
-          const granted = await nav.hid.getDevices();
-          granted.forEach((d, idx) => {
-            // Only allow genuine audio dongles, never HIDI2C or internal system chips
-            if (isDongleCandidate(d)) {
-              list.push({
-                id: `granted-${idx}-${d.vendorId ?? 0}-${d.productId ?? 0}`,
-                name: d.productName || "JadeAudio JA11 (Dongle)",
-                vendorId: d.vendorId,
-                productId: d.productId,
-                paired: true,
-                rawDevice: d as unknown as { forget?: () => Promise<void> },
-              });
-            }
-          });
-        }
-      } catch {
-        /* ignore */
-      }
-
-      // If no audio dongle found in granted list, provide the primary dongle target
-      if (list.length === 0) {
-        list.push({
-          id: "ja11-dongle",
-          name: "JadeAudio JA11 (Audio Dongle)",
-          vendorId: 0x2972,
-          productId: 0x0102,
-          paired: false,
-        });
-      }
-
-      if (active) {
-        setDevices(list);
-        setSelectedId(list[0]?.id || "");
-        setLoading(false);
-      }
+    if (!open) {
+      void cancelDeferredHidScan();
+      setScanning(false);
+      return;
     }
-
-    void loadDevices();
+    let active = true;
+    setLoading(true);
+    void refreshPaired().then((paired) => {
+      if (!active) return;
+      setPairedDevices(paired);
+      setSelectedId(paired[0]?.id || "");
+      setLoading(false);
+      setScanning(inElectron);
+    });
+    const unsub = subscribeHidDeviceList((list) => {
+      if (!active) return;
+      void refreshPaired().then((paired) => {
+        if (!active) return;
+        const available = buildAvailableList(list, paired);
+        setPairedDevices(paired);
+        setAvailableDevices(available);
+        setScanning(false);
+        setSelectedId((current) => current || paired[0]?.id || available[0]?.id || "");
+      });
+    });
     return () => {
       active = false;
+      unsub();
+      void cancelDeferredHidScan();
     };
-  }, [open]);
+  }, [open, refreshPaired, startUsbScan]);
+
+  useEffect(() => {
+    if (!open || selectedId) return;
+    const first = allDevices[0];
+    if (first) setSelectedId(first.id);
+  }, [allDevices, open, selectedId]);
 
   if (!open) return null;
 
+  const selected = allDevices.find((device) => device.id === selectedId);
+  const canUnpairSelected = Boolean(
+    selected?.paired && pairedDevices.some((p) => p.id === selectedId && p.rawDevice),
+  );
+  const canConnect = Boolean(selected) || !inElectron;
+  const empty = pairedDevices.length === 0 && availableDevices.length === 0;
+
+  async function handleRefresh() {
+    await cancelDeferredHidScan();
+    setAvailableDevices([]);
+    setScanning(true);
+    await beginDeferredHidScan();
+  }
+
   function handleConnect() {
+    if (!selected) {
+      if (!inElectron) {
+        onClose();
+        store.pairNewDac();
+      }
+      return;
+    }
     onClose();
-    // Connect directly to the selected audio dongle with preserved user gesture
+    if (selected.paired && selected.vendorId != null) {
+      void store.connectFromPicker({
+        mode: "paired",
+        vendorId: selected.vendorId,
+        productId: selected.productId,
+      });
+      return;
+    }
+    if (selected.electronDeviceId) {
+      void store.connectFromPicker({
+        mode: "deferred",
+        deviceId: selected.electronDeviceId,
+      });
+      return;
+    }
     store.pairNewDac();
   }
 
   async function handleUnpair(device: DeviceItem) {
-    if (device.rawDevice && typeof device.rawDevice.forget === "function") {
-      try {
-        await device.rawDevice.forget();
-      } catch {}
-    } else {
-      await store.unpairTarget(device.vendorId, device.productId);
+    if (!device.rawDevice && device.vendorId == null) return;
+    setLoading(true);
+    try {
+      await cancelDeferredHidScan();
+      setScanning(false);
+      const removed = await store.unpairTarget(device.vendorId, device.productId);
+      const paired = await refreshPaired();
+      setPairedDevices(paired);
+      setAvailableDevices([]);
+      setSelectedId(paired[0]?.id || availableDevices[0]?.id || "");
+      store.notify(
+        removed
+          ? `Unpaired ${device.name}. Press Refresh USB to see it under Available.`
+          : `Could not fully remove ${device.name}. Try Refresh USB, then Unpair again.`,
+      );
+    } finally {
+      setLoading(false);
     }
-    setDevices((prev) =>
-      prev.map((d) => (d.id === device.id ? { ...d, paired: false, rawDevice: undefined } : d))
-    );
-    store.notify(`Unpaired ${device.name}.`);
   }
 
   return (
@@ -151,52 +303,41 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
             <h2 id="hid-picker-title">IZER wants to connect to a HID device</h2>
           </div>
           <p className="themed-hid-modal-subtitle">
-            Select your Audio DAC from the paired devices list or scan for a new connection.
+            Choose a paired DAC or pick an available USB device — like pairing Bluetooth.
           </p>
         </div>
 
         <div className="themed-hid-device-listbox" role="listbox" tabIndex={0}>
-          {devices.map((device) => {
-            const isSelected = device.id === selectedId;
-            return (
-              <div
-                key={device.id}
-                role="option"
-                aria-selected={isSelected}
-                className={`themed-hid-device-row ${isSelected ? "selected" : ""}`}
-                onClick={() => setSelectedId(device.id)}
-              >
-                <div className="themed-hid-row-radio">
-                  <div className={`themed-hid-radio-dot ${isSelected ? "checked" : ""}`} />
-                </div>
-                <div className="themed-hid-device-info">
-                  <span className="themed-hid-device-name">{device.name}</span>
-                  {device.vendorId && device.productId ? (
-                    <span className="themed-hid-device-ids">
-                      VID: {formatHidId(device.vendorId)} · PID: {formatHidId(device.productId)}
-                    </span>
-                  ) : null}
-                </div>
-                {device.paired ? (
-                  <div className="themed-hid-row-actions">
-                    <span className="themed-hid-badge-paired">Paired</span>
-                    <button
-                      type="button"
-                      className="themed-hid-btn-unpair"
-                      title="Unpair and remove device permission"
-                      aria-label={`Unpair ${device.name}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void handleUnpair(device);
-                      }}
-                    >
-                      Unpair
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
+          {empty && !scanning ? (
+            <p className="themed-hid-empty">
+              {inElectron
+                ? "No devices listed yet. Refresh to scan USB, then select one and press Connect."
+                : "No paired DAC on this computer. Press Connect to allow JadeAudio JA11 again."}
+            </p>
+          ) : null}
+          {scanning && empty ? <p className="themed-hid-scanning">Scanning USB for HID devices…</p> : null}
+
+          {pairedDevices.length > 0 ? <p className="themed-hid-section-label">Paired</p> : null}
+          {pairedDevices.map((device) => (
+            <DeviceRow
+              key={device.id}
+              device={device}
+              selected={device.id === selectedId}
+              onSelect={() => setSelectedId(device.id)}
+            />
+          ))}
+
+          {availableDevices.length > 0 ? (
+            <p className="themed-hid-section-label themed-hid-section-label-spaced">Available (not paired)</p>
+          ) : null}
+          {availableDevices.map((device) => (
+            <DeviceRow
+              key={device.id}
+              device={device}
+              selected={device.id === selectedId}
+              onSelect={() => setSelectedId(device.id)}
+            />
+          ))}
         </div>
 
         <div className="themed-hid-modal-foot">
@@ -209,15 +350,38 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
             >
               ?
             </button>
+            {inElectron ? (
+              <button
+                type="button"
+                className="themed-hid-btn-pair-new"
+                disabled={loading}
+                onClick={() => void handleRefresh()}
+              >
+                Refresh USB
+              </button>
+            ) : null}
           </div>
           <div className="themed-hid-foot-actions">
             <button type="button" className="themed-hid-btn-cancel" onClick={onClose}>
               Cancel
             </button>
+            {canUnpairSelected ? (
+              <button
+                type="button"
+                className="themed-hid-btn-unpair themed-hid-btn-unpair-foot"
+                disabled={loading}
+                title="Unpair and remove device permission"
+                onClick={() => {
+                  if (selected) void handleUnpair(selected);
+                }}
+              >
+                Unpair
+              </button>
+            ) : null}
             <button
               type="button"
               className="themed-hid-btn-connect"
-              disabled={loading || !selectedId}
+              disabled={loading || !canConnect}
               onClick={handleConnect}
             >
               {loading ? "Connecting..." : "Connect"}

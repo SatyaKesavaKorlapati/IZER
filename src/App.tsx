@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { TopQuickSearch } from "./components/TopQuickSearch";
+import { useCustomWindowChrome, WindowChromeControls } from "./components/WindowChromeControls";
 import { PapeinEnvironment, PapeinBrandBadge } from "./components/PaperArtwork";
 import { DevicePickerModal } from "./components/DevicePickerModal";
 import { dacLabel, failureHeadline, ja11EqOffTarget } from "./lib/hid";
@@ -33,6 +34,7 @@ function chipLabel(device: DeviceState): string {
 
 export function App() {
   const store = useStore();
+  const customChrome = useCustomWindowChrome();
   const navRef = useRef<HTMLElement>(null);
   const linked = store.device.phase === "connected";
   const live = linked && ja11EqOffTarget(store.device.identity) && store.dacMode === "live";
@@ -55,6 +57,7 @@ export function App() {
 
   return (
     <>
+      <WindowChromeControls />
       <div className="atmosphere" aria-hidden="true">
         {store.theme === "papein" ? (
           <PapeinEnvironment />
@@ -200,7 +203,16 @@ export function App() {
         )}
       </div>
       <div className="shell">
-        <header className="chrome">
+        <header
+          className="chrome"
+          onDoubleClick={(event) => {
+            if (!customChrome) return;
+            const target = event.target as HTMLElement;
+            if (target.closest("button, input, textarea, a, .window-chrome-controls")) return;
+            const bridge = (window as Window & { electronAPI?: { windowMaximizeToggle?: () => Promise<boolean> } }).electronAPI;
+            void bridge?.windowMaximizeToggle?.();
+          }}
+        >
           <div className="chrome-slot-search">
             <TopQuickSearch />
           </div>

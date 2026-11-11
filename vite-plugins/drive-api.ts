@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
+import http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -140,6 +141,9 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.end(JSON.stringify(body));
 }
 
@@ -357,7 +361,7 @@ async function driveStatus(): Promise<DriveStatus> {
       verified: false,
       linking: linkState.busy,
       remote: REMOTE,
-      detail: "Install rclone from rclone.org and restart the dev server.",
+      detail: "Install rclone from rclone.org and restart IZER.",
       checkedAt,
       linkError: linkState.error,
       adoptFrom,
@@ -654,128 +658,159 @@ async function runConnectJob(): Promise<void> {
   }
 }
 
-function mountDriveApi(server: Pick<ViteDevServer, "middlewares"> | PreviewServer): void {
-  server.middlewares.use(async (req, res, next) => {
-    if (!req.url?.startsWith("/api/drive")) return next();
-    const url = new URL(req.url, "http://127.0.0.1");
-    const route = url.pathname;
+async function handleDriveApiRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  if (!url.pathname.startsWith("/api/drive")) return false;
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    });
+    res.end();
+    return true;
+  }
+  const route = url.pathname;
 
-    try {
-      if (route === "/api/drive/status" && req.method === "GET") {
-        sendJson(res, 200, await driveStatus());
-        return;
+  try {
+    if (route === "/api/drive/status" && req.method === "GET") {
+      sendJson(res, 200, await driveStatus());
+      return true;
+    }
+
+    if (route === "/api/drive/connect" && req.method === "POST") {
+      const rclone = await rclonePresent();
+      if (!rclone) {
+        sendJson(res, 503, { ok: false, detail: "rclone is not installed." });
+        return true;
       }
 
-      if (route === "/api/drive/connect" && req.method === "POST") {
-        const rclone = await rclonePresent();
-        if (!rclone) {
-          sendJson(res, 503, { ok: false, detail: "rclone is not installed." });
-          return;
-        }
+      const status = await driveStatus();
+      if (status.verified) {
+        sendJson(res, 200, { ok: true, detail: status.detail, alreadyLinked: true });
+        return true;
+      }
 
-        const status = await driveStatus();
-        if (status.verified) {
-          sendJson(res, 200, { ok: true, detail: status.detail, alreadyLinked: true });
-          return;
-        }
-
-        if (linkState.busy || linkJob) {
-          sendJson(res, 200, {
-            ok: true,
-            pending: true,
-            detail: "Sign-in already in progress. Finish Google login, then press Check connection.",
-          });
-          return;
-        }
-
+      if (linkState.busy || linkJob) {
         sendJson(res, 200, {
           ok: true,
           pending: true,
-          detail: "A Google sign-in window should open. Finish sign-in, then press Check connection.",
+          detail: "Sign-in already in progress. Finish Google login, then press Check connection.",
         });
-
-        linkJob = runConnectJob();
-        return;
+        return true;
       }
 
-      if (route === "/api/drive/adopt" && req.method === "POST") {
-        const rclone = await rclonePresent();
-        if (!rclone) {
-          sendJson(res, 503, { ok: false, detail: "rclone is not installed." });
-          return;
-        }
-        const adoptFrom = await findAdoptableRemote();
-        if (!adoptFrom) {
-          sendJson(res, 400, { ok: false, detail: "No working Google Drive remote found in rclone." });
-          return;
-        }
-        const result = await adoptExistingRemote(adoptFrom);
-        sendJson(res, result.ok ? 200 : 500, { ok: result.ok, detail: result.detail });
-        return;
-      }
+      sendJson(res, 200, {
+        ok: true,
+        pending: true,
+        detail: "A Google sign-in window should open. Finish sign-in, then press Check connection.",
+      });
 
-      if (route === "/api/drive/disconnect" && req.method === "POST") {
-        const rclone = await rclonePresent();
-        if (!rclone) {
-          sendJson(res, 503, { ok: false, detail: "rclone is not installed." });
-          return;
-        }
-        await removeRemote();
-        linkState = { busy: false };
-        sendJson(res, 200, { ok: true, detail: "Google Drive removed from this computer. Connect again anytime." });
-        return;
-      }
-
-      if (route === "/api/drive/progress" && req.method === "GET") {
-        sendJson(res, 200, uploadProgressPayload());
-        return;
-      }
-
-      if (route === "/api/drive/cancel" && req.method === "POST") {
-        const raw = await readBody(req);
-        let jobId: string | undefined;
-        if (raw.trim()) {
-          const body = JSON.parse(raw) as { id?: string };
-          jobId = body.id;
-        }
-        const result = cancelUpload(jobId);
-        sendJson(res, result.ok ? 200 : 400, result);
-        return;
-      }
-
-      if (route === "/api/drive/sync" && req.method === "POST") {
-        const status = await driveStatus();
-        if (!status.rclone) {
-          sendJson(res, 503, { ok: false, detail: status.detail });
-          return;
-        }
-        if (!status.verified) {
-          sendJson(res, 400, { ok: false, detail: status.connected ? status.detail : "Connect Google Drive first." });
-          return;
-        }
-        const raw = await readBody(req);
-        const payload = JSON.parse(raw) as { files?: DriveExportFile[]; label?: string };
-        if (!payload.files?.length) {
-          sendJson(res, 400, { ok: false, detail: "Missing export files." });
-          return;
-        }
-        const label = payload.label?.trim() || `Preset library · ${payload.files.length} files`;
-        const { id, queued } = enqueueUpload(payload.files, label);
-        sendJson(res, 202, {
-          ok: true,
-          id,
-          queued,
-          started: !queued,
-          detail: queued ? "Added to upload queue." : "Upload started.",
-        });
-        return;
-      }
-
-      sendJson(res, 404, { ok: false, detail: "Not found." });
-    } catch (error) {
-      sendJson(res, 500, { ok: false, detail: error instanceof Error ? error.message : "Server error." });
+      linkJob = runConnectJob();
+      return true;
     }
+
+    if (route === "/api/drive/adopt" && req.method === "POST") {
+      const rclone = await rclonePresent();
+      if (!rclone) {
+        sendJson(res, 503, { ok: false, detail: "rclone is not installed." });
+        return true;
+      }
+      const adoptFrom = await findAdoptableRemote();
+      if (!adoptFrom) {
+        sendJson(res, 400, { ok: false, detail: "No working Google Drive remote found in rclone." });
+        return true;
+      }
+      const result = await adoptExistingRemote(adoptFrom);
+      sendJson(res, result.ok ? 200 : 500, { ok: result.ok, detail: result.detail });
+      return true;
+    }
+
+    if (route === "/api/drive/disconnect" && req.method === "POST") {
+      const rclone = await rclonePresent();
+      if (!rclone) {
+        sendJson(res, 503, { ok: false, detail: "rclone is not installed." });
+        return true;
+      }
+      await removeRemote();
+      linkState = { busy: false };
+      sendJson(res, 200, { ok: true, detail: "Google Drive removed from this computer. Connect again anytime." });
+      return true;
+    }
+
+    if (route === "/api/drive/progress" && req.method === "GET") {
+      sendJson(res, 200, uploadProgressPayload());
+      return true;
+    }
+
+    if (route === "/api/drive/cancel" && req.method === "POST") {
+      const raw = await readBody(req);
+      let jobId: string | undefined;
+      if (raw.trim()) {
+        const body = JSON.parse(raw) as { id?: string };
+        jobId = body.id;
+      }
+      const result = cancelUpload(jobId);
+      sendJson(res, result.ok ? 200 : 400, result);
+      return true;
+    }
+
+    if (route === "/api/drive/sync" && req.method === "POST") {
+      const status = await driveStatus();
+      if (!status.rclone) {
+        sendJson(res, 503, { ok: false, detail: status.detail });
+        return true;
+      }
+      if (!status.verified) {
+        sendJson(res, 400, { ok: false, detail: status.connected ? status.detail : "Connect Google Drive first." });
+        return true;
+      }
+      const raw = await readBody(req);
+      const payload = JSON.parse(raw) as { files?: DriveExportFile[]; label?: string };
+      if (!payload.files?.length) {
+        sendJson(res, 400, { ok: false, detail: "Missing export files." });
+        return true;
+      }
+      const label = payload.label?.trim() || `Preset library · ${payload.files.length} files`;
+      const { id, queued } = enqueueUpload(payload.files, label);
+      sendJson(res, 202, {
+        ok: true,
+        id,
+        queued,
+        started: !queued,
+        detail: queued ? "Added to upload queue." : "Upload started.",
+      });
+      return true;
+    }
+
+    sendJson(res, 404, { ok: false, detail: "Not found." });
+    return true;
+  } catch (error) {
+    sendJson(res, 500, { ok: false, detail: error instanceof Error ? error.message : "Server error." });
+    return true;
+  }
+}
+
+function mountDriveApi(server: Pick<ViteDevServer, "middlewares"> | PreviewServer): void {
+  server.middlewares.use(async (req, res, next) => {
+    if (await handleDriveApiRequest(req, res)) return;
+    next();
   });
+}
+
+export const DRIVE_API_PORT = 1423;
+
+export function startStandaloneDriveServer(port = DRIVE_API_PORT, host = "127.0.0.1"): http.Server {
+  const server = http.createServer((req, res) => {
+    void handleDriveApiRequest(req, res).then((handled) => {
+      if (!handled) {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not found");
+      }
+    });
+  });
+  server.listen(port, host);
+  return server;
 }
 
 export function driveApiPlugin(): Plugin {
