@@ -10,3 +10,4 @@ out
 .env.*
 electron.log
 *-app.log
+build-staging

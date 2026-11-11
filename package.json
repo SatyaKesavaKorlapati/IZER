@@ -19,7 +19,8 @@
     "bundle:mac": "npm run build && electron-builder --mac",
     "bundle:linux": "npm run build && electron-builder --linux",
     "bundle:all": "npm run build && electron-builder -mwl",
-    "build:electron": "npm run build && electron-builder"
+    "build:electron": "npm run build && electron-builder",
+    "fast:build": "node scripts/fast_pack.cjs"
   },
   "build": {
     "appId": "com.izer.app",

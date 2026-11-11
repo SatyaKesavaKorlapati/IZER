@@ -152,77 +152,82 @@ function createWindow() {
     mainWindow = null;
   });
 
-  // Local automation bridge for testing and screen inspection
-  const http = require("node:http");
-  const server = http.createServer(async (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    if (req.method === "OPTIONS") {
-      res.writeHead(200);
-      res.end();
-      return;
-    }
-    try {
-      if (req.url === "/screenshot") {
-        if (!mainWindow) throw new Error("No window");
-        const image = await mainWindow.capturePage();
-        const png = image.toPNG();
-        res.writeHead(200, { "Content-Type": "image/png" });
-        res.end(png);
+  // Local automation bridge for testing and screen inspection (only when explicitly requested)
+  if (process.env.IZER_AUTOMATION === "1") {
+    const http = require("node:http");
+    const server = http.createServer(async (req, res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      if (req.method === "OPTIONS") {
+        res.writeHead(200);
+        res.end();
         return;
       }
-      if (req.url === "/bounds") {
-        if (!mainWindow) throw new Error("No window");
-        const bounds = mainWindow.getBounds();
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(bounds));
-        return;
+      try {
+        if (req.url === "/screenshot") {
+          if (!mainWindow) throw new Error("No window");
+          const image = await mainWindow.capturePage();
+          const png = image.toPNG();
+          res.writeHead(200, { "Content-Type": "image/png" });
+          res.end(png);
+          return;
+        }
+        if (req.url === "/bounds") {
+          if (!mainWindow) throw new Error("No window");
+          const bounds = mainWindow.getBounds();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(bounds));
+          return;
+        }
+        if (req.url === "/click" && req.method === "POST") {
+          let body = "";
+          req.on("data", (chunk) => { body += chunk; });
+          req.on("end", async () => {
+            try {
+              const { x, y } = JSON.parse(body);
+              mainWindow.webContents.focus();
+              mainWindow.webContents.sendInputEvent({ type: "mouseMove", x, y });
+              mainWindow.webContents.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+              mainWindow.webContents.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ ok: true }));
+            } catch (err) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ ok: false, error: err.message }));
+            }
+          });
+          return;
+        }
+        if (req.url === "/eval" && req.method === "POST") {
+          let body = "";
+          req.on("data", (chunk) => { body += chunk; });
+          req.on("end", async () => {
+            try {
+              const { script } = JSON.parse(body);
+              const result = await mainWindow.webContents.executeJavaScript(script);
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ ok: true, result }));
+            } catch (err) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ ok: false, error: err.message }));
+            }
+          });
+          return;
+        }
+        res.writeHead(404);
+        res.end("Not found");
+      } catch (e) {
+        res.writeHead(500);
+        res.end(String(e));
       }
-      if (req.url === "/click" && req.method === "POST") {
-        let body = "";
-        req.on("data", (chunk) => { body += chunk; });
-        req.on("end", async () => {
-          try {
-            const { x, y } = JSON.parse(body);
-            mainWindow.webContents.focus();
-            mainWindow.webContents.sendInputEvent({ type: "mouseMove", x, y });
-            mainWindow.webContents.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
-            mainWindow.webContents.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: true }));
-          } catch (err) {
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: false, error: err.message }));
-          }
-        });
-        return;
-      }
-      if (req.url === "/eval" && req.method === "POST") {
-        let body = "";
-        req.on("data", (chunk) => { body += chunk; });
-        req.on("end", async () => {
-          try {
-            const { script } = JSON.parse(body);
-            const result = await mainWindow.webContents.executeJavaScript(script);
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: true, result }));
-          } catch (err) {
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: false, error: err.message }));
-          }
-        });
-        return;
-      }
-      res.writeHead(404);
-      res.end("Not found");
-    } catch (e) {
-      res.writeHead(500);
-      res.end(String(e));
-    }
-  });
-  server.listen(1422, "127.0.0.1", () => {
-    log("Automation bridge listening on 127.0.0.1:1422");
-  });
+    });
+    server.on("error", (err) => {
+      log("Automation server non-fatal error:", err.message);
+    });
+    server.listen(1422, "127.0.0.1", () => {
+      log("Automation bridge listening on 127.0.0.1:1422");
+    });
+  }
 }
 
 app.whenReady().then(() => {
