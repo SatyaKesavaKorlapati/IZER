@@ -520,7 +520,9 @@ export async function completeDeferredHidScan(deviceId: string): Promise<HidResu
 }
 
 export async function connectGrantedHid(vendorId: number, productId?: number): Promise<HidResult> {
-  if (picker) return { ok: false, reason: "busy", detail: "" };
+  if (picker && !deferredHidRequest) {
+    picker = false;
+  }
   const hid = hidApi();
   if (!hid) return { ok: false, reason: "no-hid", detail: hidUnavailableDetail() };
   if (isJa11Unpaired() || vendorId === JA11_VENDOR_ID) {

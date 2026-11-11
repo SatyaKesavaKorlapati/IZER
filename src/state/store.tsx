@@ -355,7 +355,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   function showHidResult(result: HidResult, keepCurrentOnCancel: boolean) {
-    if (!result.ok && result.reason === "busy") return;
+    if (!result.ok && result.reason === "busy") {
+      if (deviceRef.current.phase === "opening") {
+        setDevice({ phase: "idle", detail: "DAC is busy. Press Connect again." });
+        setStatus("DAC is busy. Press Connect again.");
+      }
+      return;
+    }
     if (result.ok) {
       showConnected(result.identity);
       return;
@@ -1178,10 +1184,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       setDevice((current) => ({ ...current, phase: "opening", detail: "Waiting for a DAC…" }));
       setStatus("Waiting for a DAC…");
-      const result =
-        pick.mode === "paired"
-          ? await connectGrantedHid(pick.vendorId, pick.productId)
-          : await completeDeferredHidScan(pick.deviceId);
+      let result: HidResult;
+      if (pick.mode === "paired") {
+        await cancelDeferredHidScan();
+        result = await connectGrantedHid(pick.vendorId, pick.productId);
+      } else {
+        result = await completeDeferredHidScan(pick.deviceId);
+        await cancelDeferredHidScan();
+      }
       if (epoch.current !== seen) return;
       showHidResult(result, true);
     },
@@ -1226,13 +1236,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     unpairTarget: async (vendorId?: number, productId?: number) => {
       epoch.current += 1;
       await cancelDeferredHidScan();
-      if (deviceRef.current.phase === "connected") {
+      if (deviceRef.current.phase === "connected" || deviceRef.current.phase === "opening") {
         await closeCurrent();
       }
       const res = await unpairDevice(vendorId, productId);
-      if (deviceRef.current.identity && (vendorId == null || deviceRef.current.identity.vendorId === vendorId)) {
-        setDevice({ phase: "idle", detail: NO_DAC_DETAIL });
-      }
+      setDevice({ phase: "idle", detail: NO_DAC_DETAIL });
       setStatus(res ? "Device unpaired." : "Unpair did not complete. Try again.");
       return res;
     },

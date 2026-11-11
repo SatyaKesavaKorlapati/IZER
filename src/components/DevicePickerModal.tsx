@@ -249,22 +249,26 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
       }
       return;
     }
-    onClose();
     if (selected.paired && selected.vendorId != null) {
-      void store.connectFromPicker({
-        mode: "paired",
-        vendorId: selected.vendorId,
-        productId: selected.productId,
-      });
+      void store
+        .connectFromPicker({
+          mode: "paired",
+          vendorId: selected.vendorId,
+          productId: selected.productId,
+        })
+        .finally(() => onClose());
       return;
     }
     if (selected.electronDeviceId) {
-      void store.connectFromPicker({
-        mode: "deferred",
-        deviceId: selected.electronDeviceId,
-      });
+      void store
+        .connectFromPicker({
+          mode: "deferred",
+          deviceId: selected.electronDeviceId,
+        })
+        .finally(() => onClose());
       return;
     }
+    onClose();
     store.pairNewDac();
   }
 
