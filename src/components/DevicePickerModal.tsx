@@ -121,12 +121,6 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
     store.pairNewDac();
   }
 
-  function handlePairNew() {
-    onClose();
-    // Preserves synchronous user gesture so the browser popup opens immediately
-    store.pairNewDac();
-  }
-
   return (
     <div className="themed-hid-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="hid-picker-title">
       <div className="themed-hid-modal-sheet">
@@ -182,9 +176,6 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
               aria-label="Device connection help"
             >
               ?
-            </button>
-            <button type="button" className="themed-hid-btn-pair-new" onClick={handlePairNew} title="Connect new HID device">
-              Connect new device
             </button>
           </div>
           <div className="themed-hid-foot-actions">
