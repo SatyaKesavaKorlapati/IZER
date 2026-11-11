@@ -29,10 +29,19 @@ process.on("unhandledRejection", (reason) => {
   log("unhandledRejection:", reason);
 });
 
+// Register Application User Model ID for Windows Task Manager & Taskbar grouping
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.izer.app");
+}
+
 let mainWindow = null;
 
 function createWindow() {
   log("Inside createWindow function");
+  const appIcon = process.platform === "win32"
+    ? path.join(__dirname, "icon.ico")
+    : path.join(__dirname, "icon.png");
+
   mainWindow = new BrowserWindow({
     width: 1340,
     height: 880,
@@ -40,7 +49,7 @@ function createWindow() {
     minHeight: 720,
     title: "IZER - Indian Papercraft Parametric EQ",
     backgroundColor: "#e8c99b",
-    icon: path.join(__dirname, "icon.png"),
+    icon: appIcon,
     autoHideMenuBar: true,
     show: true,
     webPreferences: {

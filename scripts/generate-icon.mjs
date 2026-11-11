@@ -116,7 +116,7 @@ async function main() {
   const browser = await puppeteer.launch({
     executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     headless: true,
-    args: ["--no-sandbox", "--disable-gpu", "--window-size=512,512"],
+    args: ["--no-sandbox", "--disable-gpu"],
     defaultViewport: { width: 512, height: 512, deviceScaleFactor: 1 }
   });
 
@@ -138,34 +138,51 @@ async function main() {
   // Also copy to electron/icon.png
   fs.copyFileSync(png512, path.resolve("electron", "icon.png"));
 
-  // Generate .ico file format (simple multi-resolution ICO header)
-  // We can write a 256x256 png wrapped into an ICO container
-  const page256 = await browser.newPage();
-  await page256.setViewport({ width: 256, height: 256, deviceScaleFactor: 1 });
-  await page256.setContent(`<!DOCTYPE html><html><body style="margin:0;padding:0;background:transparent;overflow:hidden;"><div style="width:256px;height:256px;">${iconSvg.replace(/width="512"/, 'width="256"').replace(/height="512"/, 'height="256"')}</div></body></html>`);
-  await page256.evaluateHandle("document.fonts.ready");
-  const png256Buffer = await page256.screenshot({ omitBackground: true });
+  // Generate multi-resolution ICO supporting 16, 24, 32, 48, 64, 128, 256
+  // Required by Windows Task Manager, taskbar, alt-tab, and explorer
+  const sizes = [16, 24, 32, 48, 64, 128, 256];
+  const pngBuffers = [];
 
-  // Create standard ICO container from PNG
-  const icoHeader = Buffer.alloc(6);
-  icoHeader.writeUInt16LE(0, 0); // reserved
-  icoHeader.writeUInt16LE(1, 2); // type 1 = icon
-  icoHeader.writeUInt16LE(1, 4); // count of images = 1
+  for (const s of sizes) {
+    const p = await browser.newPage();
+    await p.setViewport({ width: s, height: s, deviceScaleFactor: 1 });
+    await p.setContent(`<!DOCTYPE html><html><body style="margin:0;padding:0;background:transparent;overflow:hidden;"><div style="width:${s}px;height:${s}px;">${iconSvg.replace(/width="512"/, `width="${s}"`).replace(/height="512"/, `height="${s}"`)}</div></body></html>`);
+    await p.evaluateHandle("document.fonts.ready");
+    const buf = await p.screenshot({ omitBackground: true });
+    pngBuffers.push({ size: s, buffer: buf });
+    await p.close();
+  }
 
-  const icoEntry = Buffer.alloc(16);
-  icoEntry.writeUInt8(0, 0); // width 256 (0 = 256)
-  icoEntry.writeUInt8(0, 1); // height 256 (0 = 256)
-  icoEntry.writeUInt8(0, 2); // colors = 0 (no palette)
-  icoEntry.writeUInt8(0, 3); // reserved
-  icoEntry.writeUInt16LE(1, 4); // planes
-  icoEntry.writeUInt16LE(32, 6); // bpp
-  icoEntry.writeUInt32LE(png256Buffer.length, 8); // size
-  icoEntry.writeUInt32LE(22, 12); // offset (6 + 16 = 22)
+  // Construct complete ICO file with all entries
+  const numImages = pngBuffers.length;
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // icon type
+  header.writeUInt16LE(numImages, 4); // count of images
 
-  const icoBuffer = Buffer.concat([icoHeader, icoEntry, png256Buffer]);
-  fs.writeFileSync(path.join(buildDir, "icon.ico"), icoBuffer);
-  fs.writeFileSync(path.resolve("electron", "icon.ico"), icoBuffer);
-  console.log("Created build/icon.ico and electron/icon.ico");
+  let currentOffset = 6 + (numImages * 16);
+  const dirEntries = [];
+
+  for (const item of pngBuffers) {
+    const entry = Buffer.alloc(16);
+    entry.writeUInt8(item.size >= 256 ? 0 : item.size, 0); // width (0 = 256)
+    entry.writeUInt8(item.size >= 256 ? 0 : item.size, 1); // height (0 = 256)
+    entry.writeUInt8(0, 2); // colors
+    entry.writeUInt8(0, 3); // reserved
+    entry.writeUInt16LE(1, 4); // planes
+    entry.writeUInt16LE(32, 6); // bpp
+    entry.writeUInt32LE(item.buffer.length, 8); // size
+    entry.writeUInt32LE(currentOffset, 12); // offset
+    dirEntries.push(entry);
+    currentOffset += item.buffer.length;
+  }
+
+  const allBuffers = [header, ...dirEntries, ...pngBuffers.map(p => p.buffer)];
+  const completeIcoBuffer = Buffer.concat(allBuffers);
+
+  fs.writeFileSync(path.join(buildDir, "icon.ico"), completeIcoBuffer);
+  fs.writeFileSync(path.resolve("electron", "icon.ico"), completeIcoBuffer);
+  console.log(`Created multi-res ICO (${sizes.join(", ")}px): build/icon.ico (${completeIcoBuffer.length} bytes)`);
 
   await browser.close();
 }
