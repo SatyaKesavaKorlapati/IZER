@@ -7956,6 +7956,42 @@ a { color: var(--accent); text-underline-offset: 3px; }
   border: 1px solid rgba(20, 197, 199, 0.4);
 }
 
+.themed-hid-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.themed-hid-btn-unpair {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--crimson, #b03a2e);
+  border: 1px solid rgba(176, 58, 46, 0.4);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.4;
+}
+
+.themed-hid-btn-unpair:hover {
+  background: rgba(176, 58, 46, 0.15);
+  border-color: rgba(176, 58, 46, 0.8);
+  color: #922b21;
+}
+
+[data-mode="dark"] .themed-hid-btn-unpair {
+  color: #ff7b72;
+  border-color: rgba(255, 123, 114, 0.45);
+}
+
+[data-mode="dark"] .themed-hid-btn-unpair:hover {
+  background: rgba(255, 123, 114, 0.2);
+  border-color: #ff7b72;
+}
+
 .themed-hid-modal-foot {
   display: flex;
   align-items: center;

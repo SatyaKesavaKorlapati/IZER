@@ -8,6 +8,7 @@ interface DeviceItem {
   vendorId?: number;
   productId?: number;
   paired?: boolean;
+  rawDevice?: { forget?: () => Promise<void> };
 }
 
 interface DevicePickerModalProps {
@@ -81,6 +82,7 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
                 vendorId: d.vendorId,
                 productId: d.productId,
                 paired: true,
+                rawDevice: d as unknown as { forget?: () => Promise<void> },
               });
             }
           });
@@ -96,7 +98,7 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
           name: "JadeAudio JA11 (Audio Dongle)",
           vendorId: 0x2972,
           productId: 0x0102,
-          paired: true,
+          paired: false,
         });
       }
 
@@ -119,6 +121,20 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
     onClose();
     // Connect directly to the selected audio dongle with preserved user gesture
     store.pairNewDac();
+  }
+
+  async function handleUnpair(device: DeviceItem) {
+    if (device.rawDevice && typeof device.rawDevice.forget === "function") {
+      try {
+        await device.rawDevice.forget();
+      } catch {}
+    } else {
+      await store.unpairTarget(device.vendorId, device.productId);
+    }
+    setDevices((prev) =>
+      prev.map((d) => (d.id === device.id ? { ...d, paired: false, rawDevice: undefined } : d))
+    );
+    store.notify(`Unpaired ${device.name}.`);
   }
 
   return (
@@ -161,7 +177,23 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
                     </span>
                   ) : null}
                 </div>
-                {device.paired ? <span className="themed-hid-badge-paired">Paired</span> : null}
+                {device.paired ? (
+                  <div className="themed-hid-row-actions">
+                    <span className="themed-hid-badge-paired">Paired</span>
+                    <button
+                      type="button"
+                      className="themed-hid-btn-unpair"
+                      title="Unpair and remove device permission"
+                      aria-label={`Unpair ${device.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleUnpair(device);
+                      }}
+                    >
+                      Unpair
+                    </button>
+                  </div>
+                ) : null}
               </div>
             );
           })}

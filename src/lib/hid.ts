@@ -66,6 +66,7 @@ interface HidDeviceLike {
   collections?: HidCollectionLike[];
   open: () => Promise<void>;
   close: () => Promise<void>;
+  forget?: () => Promise<void>;
   sendReport: (reportId: number, data: Uint8Array) => Promise<void>;
   addEventListener?: (type: "inputreport", listener: (event: HidInputReportEventLike) => void) => void;
   removeEventListener?: (type: "inputreport", listener: (event: HidInputReportEventLike) => void) => void;
@@ -222,6 +223,35 @@ async function closeUnlocked(): Promise<void> {
   const device = current;
   current = null;
   await device.close().catch(() => undefined);
+}
+
+/** Revoke WebHID permission and unpair the specified device from this computer. */
+export async function unpairDevice(vendorId?: number, productId?: number): Promise<boolean> {
+  const hid = hidApi();
+  if (!hid) return false;
+  return lock(async () => {
+    try {
+      const devices = await hid.getDevices();
+      let unpaired = false;
+      for (const d of devices) {
+        const matchVendor = vendorId == null || d.vendorId === vendorId;
+        const matchProduct = productId == null || d.productId === productId;
+        if (matchVendor && matchProduct) {
+          if (current === d) {
+            current = null;
+            await d.close().catch(() => undefined);
+          }
+          if (typeof d.forget === "function") {
+            await d.forget().catch(() => undefined);
+            unpaired = true;
+          }
+        }
+      }
+      return unpaired;
+    } catch {
+      return false;
+    }
+  });
 }
 
 class WrongInterfaceError extends Error {

@@ -58,9 +58,20 @@ export function Device() {
           </dl>
           <div className="button-row">
             {connected ? (
-              <button type="button" className="btn btn-ghost" onClick={() => void store.disconnect()}>
-                Disconnect
-              </button>
+              <>
+                <button type="button" className="btn btn-ghost" onClick={() => void store.disconnect()}>
+                  Disconnect
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-unpair"
+                  style={{ color: "#c0392b", borderColor: "rgba(192, 57, 43, 0.4)" }}
+                  title="Unpair and forget this DAC"
+                  onClick={() => void store.unpairCurrent()}
+                >
+                  Unpair
+                </button>
+              </>
             ) : (
               <button
                 type="button"

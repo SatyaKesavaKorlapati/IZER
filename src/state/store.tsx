@@ -23,6 +23,7 @@ import {
   requestKnownDac,
   sendDocumentedEqOff,
   sendJa11Editor,
+  unpairDevice,
   watchHid,
   webHidAvailable,
   type DacIdentity,
@@ -128,6 +129,8 @@ interface StoreValue {
   pairNewDac: () => void;
   pairAnyDac: () => void;
   disconnect: () => Promise<void>;
+  unpairCurrent: () => Promise<void>;
+  unpairTarget: (vendorId?: number, productId?: number) => Promise<boolean>;
   canWriteDac: boolean;
   dacBusy: boolean;
   dacActionReason: string;
@@ -1166,6 +1169,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDacNote("");
       setDevice({ phase: "idle", detail: NO_DAC_DETAIL });
       setStatus(NO_DAC_DETAIL);
+    },
+    unpairCurrent: async () => {
+      cancelLive();
+      liveBase.current = null;
+      epoch.current += 1;
+      const identity = deviceRef.current.identity;
+      await unpairDevice(identity?.vendorId, identity?.productId);
+      await closeCurrent();
+      setDacNote("");
+      setDevice({ phase: "idle", detail: NO_DAC_DETAIL });
+      setStatus("Device unpaired and removed from computer.");
+    },
+    unpairTarget: async (vendorId?: number, productId?: number) => {
+      epoch.current += 1;
+      const res = await unpairDevice(vendorId, productId);
+      if (deviceRef.current.identity && (vendorId == null || deviceRef.current.identity.vendorId === vendorId)) {
+        await closeCurrent();
+        setDevice({ phase: "idle", detail: NO_DAC_DETAIL });
+      }
+      setStatus("Device unpaired.");
+      return res;
     },
     importText,
     setImportText,
