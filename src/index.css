@@ -7964,6 +7964,34 @@ a { color: var(--accent); text-underline-offset: 3px; }
   margin-top: 4px;
 }
 
+.themed-hid-foot-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.themed-hid-btn-help {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  background: transparent;
+  color: inherit;
+  opacity: 0.65;
+  font-size: 13px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+
+.themed-hid-btn-help:hover {
+  opacity: 1;
+  transform: scale(1.05);
+}
+
 .themed-hid-btn-pair-new {
   background: transparent;
   border: 0;

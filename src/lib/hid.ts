@@ -152,6 +152,27 @@ function openFailedDetail(error: unknown): string {
   return `Open failed. ${browserDetail(error)}`;
 }
 
+export function isExcludedHardware(device?: { vendorId?: number; productId?: number; productName?: string } | null): boolean {
+  if (!device) return true;
+  const name = (device.productName || "").trim().toLowerCase();
+  if (
+    name.includes("hidi2c") ||
+    name.includes("touchpad") ||
+    name.includes("trackpad") ||
+    name.includes("keyboard") ||
+    name.includes("mouse") ||
+    name.includes("bluetooth") ||
+    name.includes("elan") ||
+    name.includes("synaptics")
+  ) {
+    return true;
+  }
+  if (device.vendorId === 0x04f3 || device.vendorId === 0x8087 || device.vendorId === 0x06cb || device.vendorId === 0x045e) {
+    return true;
+  }
+  return false;
+}
+
 export function isHidi2cName(name?: string | null): boolean {
   return /^hidi2c\b/i.test((name ?? "").trim());
 }
@@ -239,14 +260,10 @@ async function readGranted(hid: HidApi): Promise<HidResult> {
   try {
     const granted = await hid.getDevices();
     if (picker) return { ok: false, reason: "busy", detail: "" };
-    const device = prefer(granted);
+    const filtered = granted.filter((item) => !isExcludedHardware(item));
+    const device = prefer(filtered);
     if (!device) {
       await closeUnlocked();
-      const hidi2c = granted.find((item) => isHidi2cName(item.productName));
-      if (hidi2c) {
-        await closeDevice(hidi2c);
-        return { ok: false, reason: "failed", detail: wrongInterfaceDetail(hidi2c) };
-      }
       return { ok: false, reason: "none", detail: NO_DAC_DETAIL };
     }
     return { ok: true, identity: await adoptUnlocked(device) };
@@ -285,13 +302,9 @@ async function prompt(filters: HidFilter[]): Promise<{ ok: true; devices: HidDev
 }
 
 async function openPicked(devices: HidDeviceLike[]): Promise<HidResult> {
-  const device = prefer(devices);
+  const filtered = devices.filter((item) => !isExcludedHardware(item));
+  const device = prefer(filtered);
   if (!device) {
-    const hidi2c = devices.find((item) => isHidi2cName(item.productName) || (ja11EqOffTarget(item) && !ja11ReportsTarget(item)));
-    if (hidi2c) {
-      await closeDevice(hidi2c);
-      return { ok: false, reason: "failed", detail: wrongInterfaceDetail(hidi2c) };
-    }
     return { ok: false, reason: "none-chosen", detail: NO_DEVICE_CHOSEN };
   }
   try {

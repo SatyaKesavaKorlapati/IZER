@@ -83,10 +83,12 @@ function createWindow() {
     if (details.deviceList && details.deviceList.length > 0) {
       // Prioritize JadeAudio JA11 (Vendor 0x2972) and exclude system HIDI2C/Elan chips
       const ja11 = details.deviceList.find(
-        (d) => d.vendorId === 0x2972 || /ja11|jadeaudio|fiio|dongle/i.test(d.productName || "")
+        (d) =>
+          d.vendorId === 0x2972 ||
+          /ja11|jadeaudio|fiio|dongle/i.test(d.productName || "") ||
+          (!/hidi2c|elan|synaptics|touchpad/i.test(d.productName || "") && d.vendorId !== 0x04f3 && d.vendorId !== 0x8087)
       );
-      const audioDevice = ja11 || details.deviceList.find((d) => !/hidi2c|elan|synaptics|touchpad/i.test(d.productName || ""));
-      callback(audioDevice ? audioDevice.deviceId : "");
+      callback(ja11 ? ja11.deviceId : "");
     } else {
       callback("");
     }

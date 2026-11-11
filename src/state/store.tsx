@@ -1095,6 +1095,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setDevice((current) => ({ ...current, phase: "opening", detail: "Waiting for a DAC…" }));
         setStatus("Waiting for a DAC…");
       }
+      const permitted = await openPermittedDevice();
+      if (permitted.ok) {
+        if (epoch.current !== seen) return;
+        showHidResult(permitted, true);
+        return;
+      }
       const result = await requestKnownDac();
       if (epoch.current !== seen) return;
       showHidResult(result, true);

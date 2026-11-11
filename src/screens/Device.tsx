@@ -66,7 +66,7 @@ export function Device() {
                 type="button"
                 className="btn btn-ghost"
                 aria-label="Connect DAC"
-                onClick={() => void store.connectKnown()}
+                onClick={() => store.setDevicePickerOpen(true)}
                 disabled={opening || unsupported}
               >
                 {opening ? "Waiting…" : "Connect"}
@@ -76,7 +76,7 @@ export function Device() {
               type="button"
               className="btn btn-ghost"
               aria-label="Choose another HID device"
-              onClick={() => void store.connectAny()}
+              onClick={() => store.setDevicePickerOpen(true)}
               disabled={opening || unsupported}
             >
               Other device

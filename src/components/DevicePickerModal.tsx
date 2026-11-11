@@ -138,7 +138,7 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
                 fill="currentColor"
               />
             </svg>
-            <h2 id="hid-picker-title">Connect to a HID device</h2>
+            <h2 id="hid-picker-title">IZER wants to connect to a HID device</h2>
           </div>
           <p className="themed-hid-modal-subtitle">
             Select your Audio DAC from the paired devices list or scan for a new connection.
@@ -174,9 +174,19 @@ export function DevicePickerModal({ open, onClose }: DevicePickerModalProps) {
         </div>
 
         <div className="themed-hid-modal-foot">
-          <button type="button" className="themed-hid-btn-pair-new" onClick={handlePairNew} title="Scan for unlisted HID hardware">
-            Pair new device...
-          </button>
+          <div className="themed-hid-foot-left">
+            <button
+              type="button"
+              className="themed-hid-btn-help"
+              title="Ensure your JadeAudio JA11 or compatible dongle is plugged in via USB"
+              aria-label="Device connection help"
+            >
+              ?
+            </button>
+            <button type="button" className="themed-hid-btn-pair-new" onClick={handlePairNew} title="Scan for unlisted HID hardware">
+              Scan for devices
+            </button>
+          </div>
           <div className="themed-hid-foot-actions">
             <button type="button" className="themed-hid-btn-cancel" onClick={onClose}>
               Cancel
